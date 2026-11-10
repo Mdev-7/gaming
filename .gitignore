@@ -1,0 +1,6 @@
+crossfire/node_modules/
+crossfire/dist/
+crossfire/.wrangler/
+crossfire/.sites-runtime/
+crossfire/.vinext/
+crossfire/outputs/

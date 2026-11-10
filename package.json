@@ -1,0 +1,10 @@
+{
+  "name": "gameing",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix crossfire run dev",
+    "build": "npm --prefix crossfire run build",
+    "test": "npm --prefix crossfire test",
+    "test:multiplayer": "npm --prefix crossfire run test:multiplayer"
+  }
+}

@@ -81,7 +81,7 @@ To verify a deployed backend, set `COLYSEUS_URL=https://your-server.example` and
 
 Use **Root Directory: `crossfire`**, **Framework: Next.js**, **Build Command: `npm run build:vercel`**, and **Output Directory: `.next`**. The repository's `vercel.json` provides those build settings.
 
-Set the Vercel environment variable:
+Production frontends default to the Sydney service at `https://crossfire-colyseus-mdev7.fly.dev`; redeploy the latest GitHub commit to switch to it. No new Vercel environment variable is required. To override the default server, set:
 
 ```text
 COLYSEUS_URL=https://your-colyseus-service.example
@@ -89,7 +89,7 @@ COLYSEUS_URL=https://your-colyseus-service.example
 
 Redeploy after setting it. `/api/config` supplies that public URL once when joining; gameplay then goes directly through WSS. HTTPS frontends require an HTTPS/WSS backend. `COLYSEUS_URL` must point to the game service, not back to the frontend.
 
-Until a production frontend has `COLYSEUS_URL`, it deliberately keeps the old HTTP/D1 connection so the existing site remains playable during migration. The HUD labels it **HTTP**. A configured but unreachable Colyseus server reports a connection error rather than silently falling back. The old `CROSSFIRE_GAME_SERVER_URL` affects only the legacy HTTP proxy.
+For a deliberate rollback, set `COLYSEUS_URL=legacy` and redeploy; the HUD labels that connection **HTTP**. Colyseus failures report a connection error rather than silently switching transports. The old `CROSSFIRE_GAME_SERVER_URL` affects only the legacy HTTP proxy.
 
 ## Checks
 

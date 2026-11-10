@@ -6,6 +6,15 @@ const [command, ...args] = process.argv.slice(2);
 if (!["dev", "build"].includes(command)) throw new Error("Expected dev or build.");
 const managedLinux = readExecutionProfile() === "managed-linux";
 
+// Vercel's Next.js adapter requires .next/routes-manifest.json. Vinext emits
+// Cloudflare artifacts under dist/ and must remain the default for Sites builds.
+if (process.env.VERCEL === "1" && command === "build") {
+  const cli = new URL("../node_modules/next/dist/bin/next", import.meta.url);
+  const result = spawnSync(process.execPath, [fileURLToPath(cli), "build", "--webpack", ...args], { stdio: "inherit" });
+  if (result.error) throw result.error;
+  process.exit(result.status ?? 1);
+}
+
 if (managedLinux && command === "build") {
   const result = spawnSync("bash", [
     fileURLToPath(new URL("./build-verified.sh", import.meta.url)), ...args,

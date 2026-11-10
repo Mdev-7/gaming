@@ -58,6 +58,25 @@ Room invitations use the URL fragment. No third-party networking or hosted asset
 
 ## Hosting
 
+### Vercel
+
+Import `Mdev-7/gaming` into Vercel and set **Root Directory** to `crossfire` and **Framework Preset** to `Next.js`. Leave the install, build, and output settings on their defaults; `vercel.json` selects `npm ci`, `npm run build:vercel`, and `.next`. Remove an old `dist` output override if you added one.
+
+Vercel uses a native Next.js build so `.next/routes-manifest.json` is generated. `npm run build` also selects Next.js automatically when Vercel sets `VERCEL=1`. Local and Sites builds continue to use Vinext.
+
+The Vercel site forwards `/api/game` to the existing public Crossfire game server, which owns the shared Cloudflare D1 room state. It does not create an in-memory multiplayer server inside Vercel functions. The existing game server must remain online and public. To use a different compatible backend, set the server-only Vercel environment variable `CROSSFIRE_GAME_SERVER_URL` to its origin and redeploy; never set it to the Vercel site's own URL.
+
+To test this deployment path locally:
+
+```sh
+npm run build:vercel
+npm run start:vercel
+```
+
+The Next.js site defaults to port 3000. With it running, `CROSSFIRE_URL=http://localhost:3000 npm run test:multiplayer` checks the full frontend API proxy and live game server.
+
+### Sites / Cloudflare
+
 `.openai/hosting.json` retains this game's Sites project ID and declares the `DB` binding. The Sites build integration outputs the Cloudflare Worker and client assets in `dist/`. Deployment applies the tracked schema migration under `drizzle/`.
 
 Sites access is separate from in-game room codes. A private publication only allows approved visitors. Public link access must be enabled before friends can join the hosted game without an invitation to the Site.

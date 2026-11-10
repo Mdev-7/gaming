@@ -2,9 +2,14 @@ import handler from "vinext/server/fetch-handler";
 import { runWithConnectorBinding } from "../lib/connector-context";
 import type { ConnectorBinding } from "../lib/connector-contract.mjs";
 import { createGameApi } from "../lib/game-server";
+import { multiplayerConfig } from "../lib/multiplayer-config";
 
 const worker = {
   fetch(request: Request, env: Cloudflare.Env, ctx: ExecutionContext<{ CONNECTORS?: ConnectorBinding }>) {
+    if (new URL(request.url).pathname === '/api/config') {
+      try { return Response.json(multiplayerConfig(request.url, env.COLYSEUS_URL), { headers: { 'Cache-Control': 'no-store' } }); }
+      catch { return Response.json({ error: 'The multiplayer server is not configured correctly.' }, { status: 503 }); }
+    }
     if (new URL(request.url).pathname === '/api/game') {
       const api = createGameApi(env.DB);
       if (request.method === 'GET') return api.GET();

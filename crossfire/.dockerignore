@@ -1,0 +1,12 @@
+node_modules
+server/node_modules
+dist
+server/dist
+.next
+.vinext
+.wrangler
+.sites-runtime
+.git
+outputs
+.env*
+server/.env*

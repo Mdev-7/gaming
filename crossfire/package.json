@@ -15,11 +15,18 @@
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
-    "test:multiplayer": "node --experimental-strip-types tests/multiplayer.mts",
+    "test:multiplayer": "npm --prefix server test",
+    "test:legacy": "node --experimental-strip-types tests/multiplayer.mts",
+    "server:install": "npm --prefix server ci",
+    "server:dev": "npm --prefix server run dev",
+    "server:build": "npm --prefix server run build",
+    "server:start": "npm --prefix server start",
+    "server:smoke": "npm --prefix server run smoke",
     "db:local": "node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0000_fixed_king_cobra.sql"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
+    "@colyseus/sdk": "^0.18.9",
     "@hookform/resolvers": "^5.7.1",
     "@shadcn/react": "^0.3.0",
     "class-variance-authority": "0.7.1",
@@ -41,9 +48,9 @@
     "recharts": "^3.8.0",
     "sonner": "^2.0.8",
     "tailwind-merge": "3.6.0",
+    "three": "^0.180.0",
     "vaul": "^1.1.2",
-    "zod": "^3.25.76",
-    "three": "^0.180.0"
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",
@@ -52,6 +59,7 @@
     "@types/node": "22.19.19",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
+    "@types/three": "^0.180.0",
     "@vitejs/plugin-react": "6.0.2",
     "@vitejs/plugin-rsc": "0.5.26",
     "drizzle-kit": "0.31.10",
@@ -65,8 +73,7 @@
     "typescript": "5.9.3",
     "vinext": "1.0.0-beta.5",
     "vite": "8.0.13",
-    "wrangler": "4.92.0",
-    "@types/three": "^0.180.0"
+    "wrangler": "4.92.0"
   },
   "type": "module",
   "overrides": {

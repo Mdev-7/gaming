@@ -126,6 +126,10 @@ export class ArenaScene {
   state: Snapshot | null = null; playerId = ''; active = false; disposed = false;
   paused = false; freeLook = false; lastFrame = 0; lastUI = 0; sequence = 0;
   pending: { seq: number; input: Input; dt: number }[] = [];
+  correction = new THREE.Vector3();
+  history: { state: Snapshot; at: number }[] = [];
+  onInput: (() => void) | null = null;
+  connected = true;
   hitUntil = 0; damageUntil = 0; recoil = 0; shotAt = 0; fps = 60;
   seenEvents = new Set<string>();
   traces: { line: THREE.Line; until: number }[] = [];
@@ -169,6 +173,7 @@ export class ArenaScene {
     if (e.code === 'KeyR') this.reload = true;
     if (e.code === 'Tab') this.onScoreboard(true);
     if (e.code === 'Escape' && !document.pointerLockElement) { this.paused = true; this.onPause(true); }
+    if (['KeyR', 'Space', 'Digit1', 'Digit2', 'Digit3'].includes(e.code) && !e.repeat) this.onInput?.();
   };
   keyup = (e: KeyboardEvent) => { this.keys.delete(e.code); if (e.code === 'Tab') this.onScoreboard(false); };
   mousemove = (e: MouseEvent) => {
@@ -177,9 +182,9 @@ export class ArenaScene {
     this.yaw -= e.movementX * 0.002 * this.sensitivity * (this.aim ? 0.6 : 1);
     this.pitch = THREE.MathUtils.clamp(this.pitch - e.movementY * 0.002 * this.sensitivity * (this.aim ? 0.6 : 1), -1.45, 1.45);
   };
-  mousedown = (e: MouseEvent) => { if ((document.pointerLockElement === this.renderer.domElement || (this.freeLook && e.target === this.renderer.domElement)) && this.active && !this.paused) { if (e.button === 0) this.fire = true; if (e.button === 2) this.aim = true; } };
-  mouseup = (e: MouseEvent) => { if (e.button === 0) this.fire = false; if (e.button === 2) this.aim = false; };
-  blur = () => { this.keys.clear(); this.fire = false; this.aim = false; };
+  mousedown = (e: MouseEvent) => { if ((document.pointerLockElement === this.renderer.domElement || (this.freeLook && e.target === this.renderer.domElement)) && this.active && !this.paused) { if (e.button === 0) { this.fire = true; this.onInput?.(); } if (e.button === 2) this.aim = true; } };
+  mouseup = (e: MouseEvent) => { if (e.button === 0) { this.fire = false; if (this.active) this.onInput?.(); } if (e.button === 2) this.aim = false; };
+  blur = () => { this.keys.clear(); this.fire = false; this.aim = false; this.onInput?.(); };
   visibility = () => { if (document.hidden) { this.blur(); if (this.active) { this.paused = true; this.onPause(true); } } };
   lockchange = () => { if (this.active) { this.paused = document.pointerLockElement !== this.renderer.domElement; if (!this.paused) this.freeLook = false; if (this.paused) this.blur(); this.onPause(this.paused); } };
   enableFreeLook = () => { if (this.active) { this.freeLook = true; this.paused = false; this.onPause(false); } };
@@ -193,13 +198,14 @@ export class ArenaScene {
     } catch { this.enableFreeLook(); }
   }
   start(state: Snapshot, id: string) {
-    this.state = state; this.playerId = id; this.active = true; this.paused = true; this.freeLook = false;
+    this.state = state; this.playerId = id; this.active = true; this.paused = true; this.freeLook = false; this.connected = true;
     const p = state.players[id]; this.local = { x: p.x, y: p.y, z: p.z, vy: 0 }; this.yaw = p.yaw; this.pitch = 0; this.weapon = 0; this.sequence = p.seq;
-    this.pending = []; this.seenEvents.clear(); state.events.forEach(e => this.seenEvents.add(e.id));
+    this.pending = []; this.correction.set(0, 0, 0); this.history = [{ state, at: performance.now() / 1000 }]; this.seenEvents.clear(); state.events.forEach(e => this.seenEvents.add(e.id));
   }
-  stop() { this.active = false; this.state = null; this.playerId = ''; this.blur(); if (document.pointerLockElement) document.exitPointerLock(); this.remote.forEach(g => { this.scene.remove(g); this.disposeObject(g); }); this.remote.clear(); }
+  stop() { this.active = false; this.state = null; this.playerId = ''; this.onInput = null; this.pending = []; this.history = []; this.blur(); if (document.pointerLockElement) document.exitPointerLock(); this.remote.forEach(g => { this.scene.remove(g); this.disposeObject(g); }); this.remote.clear(); }
+  setConnected(connected: boolean) { if (this.connected && !connected) { this.blur(); this.paused = true; this.onPause(true); } this.connected = connected; }
   input(): Input {
-    const engaged = this.active && !this.paused && !document.hidden;
+    const engaged = this.active && this.connected && !this.paused && !document.hidden;
     let forward = engaged ? Number(this.keys.has('KeyW') || this.keys.has('ArrowUp')) - Number(this.keys.has('KeyS') || this.keys.has('ArrowDown')) : 0;
     let right = engaged ? Number(this.keys.has('KeyD') || this.keys.has('ArrowRight')) - Number(this.keys.has('KeyA') || this.keys.has('ArrowLeft')) : 0;
     const norm = Math.max(1, Math.hypot(forward, right)); forward /= norm; right /= norm;
@@ -210,21 +216,24 @@ export class ArenaScene {
     // Sent input IDs let reconciliation discard acknowledged movement.
     return input;
   }
-  receive(state: Snapshot, sent: Input) {
+  receive(state: Snapshot) {
     const previous = this.state?.players[this.playerId], me = state.players[this.playerId];
     if (!me) return;
     const now = performance.now() / 1000;
     if (previous && me.hp < previous.hp) { this.damageUntil = now + 0.35; this.sound('hurt'); }
-    if (previous && previous.hp <= 0 && me.hp > 0) { this.local = { x: me.x, y: me.y, z: me.z, vy: me.vy }; this.pending = []; this.yaw = me.yaw; }
-    // Server movement is one input interval behind by design. Keep prediction
-    // smooth, correcting divergence gradually and teleports immediately.
-    const error = Math.hypot(this.local.x - me.x, this.local.z - me.z);
-    if (error > 3) { this.local.x = me.x; this.local.z = me.z; this.local.y = me.y; this.local.vy = me.vy; }
-    else if (!this.input().mx && !this.input().mz) { this.local.x += (me.x - this.local.x) * 0.5; this.local.z += (me.z - this.local.z) * 0.5; }
+    const respawned = previous && previous.hp <= 0 && me.hp > 0;
+    const previousPosition = new THREE.Vector3(this.local.x, this.local.y, this.local.z).add(this.correction);
+    this.pending = this.pending.filter(frame => frame.seq > me.seq).slice(-120);
+    const predicted = { x: me.x, y: me.y, z: me.z, vy: me.vy };
+    if (me.hp > 0 && !respawned) for (const frame of this.pending) movePlayer(predicted, frame.input, frame.dt);
+    this.local = predicted;
+    if (respawned || me.hp <= 0 || previousPosition.distanceTo(new THREE.Vector3(predicted.x, predicted.y, predicted.z)) > 3) {
+      this.correction.set(0, 0, 0); this.pending = []; if (respawned) this.yaw = me.yaw;
+    } else this.correction.copy(previousPosition).sub(new THREE.Vector3(predicted.x, predicted.y, predicted.z));
     this.state = state;
+    this.history.push({ state, at: now }); this.history = this.history.slice(-30);
     for (const event of state.events) if (!this.seenEvents.has(event.id)) { this.seenEvents.add(event.id); if (state.time - event.at < 1.5) this.event(event, now); }
     if (this.seenEvents.size > 800) this.seenEvents = new Set(state.events.map(e => e.id));
-    void sent;
   }
   event(event: GameEvent, now: number) {
     if (event.type !== 'shot' || !event.from || !event.to) return;
@@ -257,8 +266,13 @@ export class ArenaScene {
     const me = this.state?.players[this.playerId];
     if (this.active && me) {
       const input = this.input();
-      if (me.hp > 0 && !this.state?.winner) movePlayer(this.local, input, dt);
-      this.camera.position.set(this.local.x, this.local.y + (me.hp > 0 ? EYE_HEIGHT : 0.55), this.local.z);
+      if (me.hp > 0 && !this.state?.winner && this.connected) {
+        movePlayer(this.local, input, dt);
+        this.pending.push({ seq: this.sequence + 1, input: { ...input }, dt });
+        this.pending = this.pending.slice(-120);
+      }
+      this.correction.multiplyScalar(Math.exp(-dt * 18));
+      this.camera.position.set(this.local.x + this.correction.x, this.local.y + this.correction.y + (me.hp > 0 ? EYE_HEIGHT : 0.55), this.local.z + this.correction.z);
       const moving = Math.hypot(input.mx, input.mz) > 0.1;
       if (moving && this.local.y < 0.1) this.camera.position.y += Math.sin(now * 13) * 0.035;
       this.camera.rotation.set(this.pitch + this.recoil * 0.03, this.yaw, 0, 'YXZ');
@@ -273,12 +287,19 @@ export class ArenaScene {
       this.gunRoot.rotation.set(this.recoil * 0.09 + (reload ? -0.5 + Math.sin(now * 9) * 0.1 : 0), reload ? -0.3 : 0, moving ? Math.sin(now * 6.5) * 0.012 : 0);
       this.gunRoot.scale.setScalar(0.66);
       this.guns.forEach((g, i) => { g.visible = i === this.weapon; });
+      const latest = this.history[this.history.length - 1];
+      const renderTime = latest ? latest.state.time + now - latest.at - 0.075 : this.state!.time;
+      let before = this.history[0]?.state || this.state!, after = this.state!;
+      for (const entry of this.history) { if (entry.state.time <= renderTime) before = entry.state; if (entry.state.time >= renderTime) { after = entry.state; break; } }
+      const blend = THREE.MathUtils.clamp((renderTime - before.time) / Math.max(0.001, after.time - before.time), 0, 1);
       for (const [id, p] of Object.entries(this.state!.players)) {
         if (id === this.playerId) continue;
         let group = this.remote.get(id); if (!group) { group = avatar(p); group.position.set(p.x, p.y, p.z); this.scene.add(group); this.remote.set(id, group); }
         group.visible = p.hp > 0 && p.ready;
-        group.position.lerp(new THREE.Vector3(p.x, p.y, p.z), Math.min(1, dt * 15));
-        group.rotation.y = p.yaw;
+        const a = before.players[id] || p, b = after.players[id] || p;
+        const teleported = Math.hypot(a.x - b.x, a.z - b.z) > 8 || (a.hp <= 0 && b.hp > 0);
+        group.position.set(teleported ? b.x : THREE.MathUtils.lerp(a.x, b.x, blend), teleported ? b.y : THREE.MathUtils.lerp(a.y, b.y, blend), teleported ? b.z : THREE.MathUtils.lerp(a.z, b.z, blend));
+        group.rotation.y = a.yaw + Math.atan2(Math.sin(b.yaw - a.yaw), Math.cos(b.yaw - a.yaw)) * blend;
         const label = group.userData.label as THREE.Mesh; label.rotation.y = this.yaw - p.yaw;
         group.scale.setScalar(p.protectedUntil > this.state!.time ? 0.97 + Math.sin(now * 10) * 0.025 : 1);
       }

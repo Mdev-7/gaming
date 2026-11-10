@@ -4,16 +4,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { BOXES, WEAPONS, SCORE_LIMIT, type Snapshot } from '../../lib/game';
 import type { ArenaScene, SceneStatus } from './scene';
 import { GunIcon, Icon } from './icons';
+import { connectMatch, type MatchConnection } from '../../lib/multiplayer';
 
-type Session = { code: string; id: string; token: string };
+type Session = { code: string; id: string; transport: 'colyseus' | 'legacy' };
 type Modal = 'join' | 'help' | 'settings' | null;
 const initialStatus: SceneStatus = { locked: false, hp: 100, ammo: 30, weapon: 0, reloading: false, hit: false, damage: false, dead: false, respawn: 0, fps: 60 };
-async function api(body: unknown) {
-  const response = await fetch('/api/game', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(8000) });
-  const data = await response.json() as { error?: string; code: string; id: string; token: string; state: Snapshot };
-  if (!response.ok) throw Object.assign(new Error(data.error || 'Unable to connect. Please try again.'), { status: response.status });
-  return data;
-}
 function Radar({ state, id }: { state: Snapshot; id: string }) {
   return <svg className="radar" viewBox="-27 -27 54 54" aria-label="Arena minimap">
     <rect x="-26" y="-26" width="52" height="52" fill="#17262b"/>
@@ -23,7 +18,7 @@ function Radar({ state, id }: { state: Snapshot; id: string }) {
 }
 export default function Arena() {
   const canvasHost = useRef<HTMLDivElement>(null), sceneRef = useRef<ArenaScene | null>(null), sessionRef = useRef<Session | null>(null);
-  const syncTimer = useRef<ReturnType<typeof setTimeout> | null>(null), mounted = useRef(true), networkEpoch = useRef(0);
+  const connectionRef = useRef<MatchConnection | null>(null), mounted = useRef(true), networkEpoch = useRef(0);
   const [ready, setReady] = useState(false), [sceneError, setSceneError] = useState('');
   const [name, setName] = useState(''), [roomCode, setRoomCode] = useState('');
   const [lobby, setLobby] = useState(true), [busy, setBusy] = useState(''), [error, setError] = useState('');
@@ -46,49 +41,40 @@ export default function Arena() {
     }).catch(() => setSceneError('Could not load the arena. Refresh to try again.'));
     return () => {
       cancelled = true; mounted.current = false; networkEpoch.current++;
-      if (syncTimer.current) clearTimeout(syncTimer.current); if (copyTimer.current) clearTimeout(copyTimer.current);
+      connectionRef.current?.close(); connectionRef.current = null; if (copyTimer.current) clearTimeout(copyTimer.current);
       sceneRef.current?.dispose(); sceneRef.current = null;
     };
   }, []);
   useEffect(() => { if (sceneRef.current) sceneRef.current.muted = muted; }, [muted]);
   useEffect(() => { if (sceneRef.current) sceneRef.current.sensitivity = sensitivity; }, [sensitivity]);
   const leave = useCallback(() => {
-    const current = sessionRef.current; networkEpoch.current++;
-    if (syncTimer.current) clearTimeout(syncTimer.current);
+    networkEpoch.current++;
+    connectionRef.current?.close(); connectionRef.current = null;
     sessionRef.current = null; sceneRef.current?.stop();
     setSession(null); setState(null); setLobby(true); setPaused(true); setModal(null); setScoreboard(false); setError(''); setNetwork('connected'); setStatus(initialStatus);
     history.replaceState(null, '', location.pathname + location.search);
-    if (current) void api({ ...current, action: 'leave' }).catch(() => {});
   }, []);
   async function enter(action: string) {
     if (busy || !ready) return;
     setBusy(action); setError('');
     try {
-      const data = await api({ action, name: name.trim() || 'Rookie', code: roomCode });
-      if (!mounted.current) return;
-      const current: Session = { code: data.code, id: data.id, token: data.token };
-      try { localStorage.setItem('crossfire-name', name.trim() || 'Rookie'); } catch { /* optional preference */ }
-      sessionRef.current = current; setSession(current); setState(data.state); sceneRef.current!.start(data.state, current.id);
-      setLobby(false); setModal(null); setPaused(true); setStatus(initialStatus); setNetwork('connected');
-      history.replaceState(null, '', '#' + current.code);
       const epoch = ++networkEpoch.current;
-      let lastSuccess = performance.now();
-      const sync = async () => {
-        if (!mounted.current || epoch !== networkEpoch.current || !sceneRef.current) return;
-        const input = sceneRef.current.networkInput(), at = performance.now();
-        try {
-          const update = await api({ ...current, action: 'sync', input });
-          if (!mounted.current || epoch !== networkEpoch.current) return;
-          lastSuccess = performance.now(); setPing(Math.round(lastSuccess - at)); setNetwork('connected');
-          sceneRef.current?.receive(update.state, input); setState(update.state);
-        } catch (e) {
-          if (!mounted.current || epoch !== networkEpoch.current) return;
-          if (e instanceof Error && 'status' in e && e.status === 401) { leave(); setError('Your session expired. Join the room to play again.'); return; }
-          if (performance.now() - lastSuccess > 2500) setNetwork('reconnecting');
-        }
-        if (mounted.current && epoch === networkEpoch.current) syncTimer.current = setTimeout(sync, Math.max(30, 110 - (performance.now() - at)));
-      };
-      void sync();
+      const currentMatch = () => mounted.current && epoch === networkEpoch.current && sessionRef.current !== null;
+      const connection = await connectMatch(action, name.trim() || 'Rookie', roomCode, {
+        snapshot(next) { if (currentMatch()) { sceneRef.current?.receive(next); setState(next); } },
+        ping(ms) { if (currentMatch()) setPing(ms); },
+        network(connected) { if (currentMatch()) { setNetwork(connected ? 'connected' : 'reconnecting'); sceneRef.current?.setConnected(connected); } },
+        closed(message) { if (currentMatch()) { leave(); setError(message); } },
+      });
+      if (!mounted.current || epoch !== networkEpoch.current || !sceneRef.current) { connection.close(); return; }
+      const current: Session = { code: connection.code, id: connection.id, transport: connection.transport };
+      try { localStorage.setItem('crossfire-name', name.trim() || 'Rookie'); } catch { /* optional preference */ }
+      connectionRef.current = connection; sessionRef.current = current;
+      setSession(current); setState(connection.state); sceneRef.current.start(connection.state, current.id);
+      sceneRef.current.onInput = () => connection.flush();
+      setLobby(false); setModal(null); setPaused(true); setStatus(initialStatus); setPing(0); setNetwork('connected');
+      history.replaceState(null, '', '#' + current.code);
+      connection.start(() => sceneRef.current!.networkInput());
     } catch (e) { setError(e instanceof Error ? e.message : 'Could not join the match.'); }
     finally { if (mounted.current) setBusy(''); }
   }
@@ -148,7 +134,7 @@ export default function Arena() {
     </>}
     {!lobby && state && session && <>
       <div className={'damage-vignette ' + (status.damage ? 'visible' : '')}/>
-      <div className="game-top"><div className="match-info"><span className="mini-brand">CROSSFIRE</span><span>SECTOR 07 <i/> FREE FOR ALL</span></div><div className="match-clock"><span>FIRST TO {SCORE_LIMIT}</span><strong>{clock}</strong></div><div className="connection-info"><span className={network === 'connected' ? 'connection-good' : 'connection-bad'}>● {network === 'connected' ? ping + ' MS' : 'RECONNECTING'}</span><span>{humanCount} ONLINE{state.mode === 'practice' ? ' · 3 BOTS' : ''}</span></div></div>
+      <div className="game-top"><div className="match-info"><span className="mini-brand">CROSSFIRE</span><span>SECTOR 07 <i/> FREE FOR ALL</span></div><div className="match-clock"><span>FIRST TO {SCORE_LIMIT}</span><strong>{clock}</strong></div><div className="connection-info"><span className={network === 'connected' ? 'connection-good' : 'connection-bad'}>● {network === 'connected' ? ping + ' MS' : 'RECONNECTING'}</span><span>{humanCount} ONLINE{state.mode === 'practice' ? ' · 3 BOTS' : ''} · {session.transport === 'colyseus' ? 'WS 30 HZ' : 'HTTP'}</span></div></div>
       <div className="radar-panel"><Radar state={state} id={session.id}/><button onClick={copyInvite}><Icon name={copied ? 'check' : 'link'} size={13}/>{copied ? 'LINK COPIED' : 'ROOM ' + session.code}</button></div>
       <div className="killfeed">{kills.map(k => <div key={k.id}><span className={k.by === session.id ? 'you' : ''}>{k.name}</span><GunIcon weapon={k.weapon} size={42}/><span className={k.target === session.id ? 'you' : ''}>{k.victim}</span>{k.headshot && <Icon name="crosshair" size={12}/>}</div>)}</div>
       {!paused && !status.dead && !state.winner && <div className={'crosshair ' + (status.hit ? 'is-hit' : '')}><i/><i/><i/><i/>{status.hit && <span>×</span>}</div>}
